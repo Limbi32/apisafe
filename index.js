@@ -40,34 +40,36 @@ async function authenticate(req, res, next) {
     return res.status(401).json({ message: "Token invalide" });
   }
 }
-
-// ----------------- Signup API -----------------
+// ===================================================
+// 🔹 SIGNUP — Inscription simplifiée (3 étapes)
+// ===================================================
 app.post("/api/signup", async (req, res) => {
   try {
-    const { name, surname, email, password, phone, originCountry, residenceCountry, birthdate } = req.body;
+    const { email, password, name, surname, residenceCountry, birthdate } = req.body;
 
     if (!email || !password || !name || !surname) {
-      return res.status(400).json({ message: "Champs manquants" });
+      return res.status(400).json({ message: "Champs obligatoires manquants" });
     }
 
+    // Création de l'utilisateur Firebase Auth
     const userRecord = await admin.auth().createUser({
       email,
       password,
       displayName: `${name} ${surname}`,
     });
 
+    // Enregistrement dans Firestore
     await db.collection("users").doc(userRecord.uid).set({
       uid: userRecord.uid,
       name,
       surname,
       email,
-      phone,
-      originCountry,
       residenceCountry,
-      birthdate,
+      birthdate: birthdate || null, // facultatif
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
     });
 
+    // Création d’un token custom pour la connexion immédiate
     const customToken = await admin.auth().createCustomToken(userRecord.uid);
 
     return res.status(201).json({
@@ -76,7 +78,7 @@ app.post("/api/signup", async (req, res) => {
       token: customToken,
     });
   } catch (error) {
-    console.error(error);
+    console.error("Erreur inscription:", error);
     return res.status(500).json({ message: error.message });
   }
 });
