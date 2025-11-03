@@ -40,8 +40,9 @@ async function authenticate(req, res, next) {
     return res.status(401).json({ message: "Token invalide" });
   }
 }
+
 // ===================================================
-// 🔹 SIGNUP — Inscription simplifiée (3 étapes)
+// 🔹 SIGNUP — Inscription simplifiée
 // ===================================================
 app.post("/api/signup", async (req, res) => {
   try {
@@ -51,7 +52,7 @@ app.post("/api/signup", async (req, res) => {
       return res.status(400).json({ message: "Champs obligatoires manquants" });
     }
 
-    // Création de l'utilisateur Firebase Auth
+    // Création utilisateur Firebase Auth
     const userRecord = await admin.auth().createUser({
       email,
       password,
@@ -64,12 +65,11 @@ app.post("/api/signup", async (req, res) => {
       name,
       surname,
       email,
-      residenceCountry,
-      birthdate: birthdate || null, // facultatif
+      residenceCountry: residenceCountry || null,
+      birthdate: birthdate || null,
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
     });
 
-    // Création d’un token custom pour la connexion immédiate
     const customToken = await admin.auth().createCustomToken(userRecord.uid);
 
     return res.status(201).json({
@@ -83,7 +83,7 @@ app.post("/api/signup", async (req, res) => {
   }
 });
 
-// ----------------- Login API -----------------
+// ----------------- LOGIN -----------------
 app.post("/api/login", async (req, res) => {
   try {
     const { email, password } = req.body;
@@ -112,7 +112,7 @@ app.post("/api/login", async (req, res) => {
   }
 });
 
-// ----------------- Get User Info API -----------------
+// ----------------- GET USER INFO -----------------
 app.get("/api/user", authenticate, async (req, res) => {
   try {
     const uid = req.user.uid;
@@ -126,64 +126,63 @@ app.get("/api/user", authenticate, async (req, res) => {
   }
 });
 
-// ----------------- Save Testimony API -----------------
+// ----------------- SAVE TESTIMONY -----------------
 app.post("/api/testimonies", authenticate, async (req, res) => {
   try {
     const uid = req.user.uid;
     const {
-  ethnie,
-  nationalite,
-  communaute,
-  dateVoyage,
-  villes,
-  countryVisited,      // ✅ Nouveau
-  securityRating,       // ✅ Nouveau
-  observedDiscrimination,
-  contextDiscrimination,
-  frequence,
-  temoignage,
-  recommande,
-  anonyme,
-} = req.body;
+      ethnie,
+      nationalite,
+      communaute,
+      dateVoyage,
+      villes,
+      countryVisited,
+      securityRating,
+      observedDiscrimination,
+      contextDiscrimination,
+      frequence,
+      temoignage,
+      recommande,
+      anonyme,
+    } = req.body;
 
-    if (!temoignage) return res.status(400).json({ message: "Le témoignage est obligatoire" });
+    // Validation des champs obligatoires
+    if (!countryVisited || !villes || !temoignage) {
+      return res.status(400).json({ message: "Champs obligatoires manquants" });
+    }
 
-   const testimonyRef = await db.collection("testimonies").add({
-  uid,
-  ethnie,
-  nationalite,
-  communaute,
-  dateVoyage,
-  villes,
-  countryVisited,        // ✅ Nouveau
-  securityRating,        // ✅ Nouveau
-  observedDiscrimination,
-  contextDiscrimination,
-  frequence,
-  temoignage,
-  recommande,
-  anonyme,
-  createdAt: admin.firestore.FieldValue.serverTimestamp(),
-});
-
-    return res.status(201).json({
-      message: "Témoignage enregistré",
-      id: testimonyRef.id,
+    const testimonyRef = await db.collection("testimonies").add({
+      uid,
+      ethnie: ethnie || null,
+      nationalite: nationalite || null,
+      communaute: communaute || null,
+      dateVoyage: dateVoyage || null,
+      villes,
+      countryVisited,
+      securityRating: securityRating || null,
+      observedDiscrimination: observedDiscrimination || "Non",
+      contextDiscrimination: contextDiscrimination || null,
+      frequence: frequence || null,
+      temoignage,
+      recommande: recommande || null,
+      anonyme: anonyme || "Oui",
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
     });
+
+    return res.status(201).json({ message: "Témoignage enregistré", id: testimonyRef.id });
   } catch (error) {
     console.error("Erreur enregistrement témoignage:", error);
     return res.status(500).json({ message: error.message });
   }
 });
 
+// ----------------- GET TESTIMONIES -----------------
 app.get("/api/testimonies", authenticate, async (req, res) => {
   try {
     const { country } = req.query;
 
     if (!country) {
-      return res
-        .status(400)
-        .json({ message: "Le pays est requis pour filtrer les témoignages." });
+      return res.status(400).json({ message: "Le pays est requis pour filtrer les témoignages." });
     }
 
     const snapshot = await db
@@ -205,4 +204,6 @@ app.get("/api/testimonies", authenticate, async (req, res) => {
     return res.status(500).json({ message: error.message });
   }
 });
+
+// ----------------- START SERVER -----------------
 app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
