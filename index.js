@@ -1,4 +1,3 @@
-// index.js
 import express from "express";
 import bodyParser from "body-parser";
 import cors from "cors";
@@ -15,195 +14,191 @@ app.use(cors());
 app.use(bodyParser.json());
 
 // Initialisation Firebase Admin
-admin.initializeApp({
-  credential: admin.credential.cert({
-    projectId: process.env.FIREBASE_PROJECT_ID,
-    clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-    privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, "\n"),
-  }),
-});
+if (!admin.apps.length) {
+  admin.initializeApp({
+    credential: admin.credential.cert({
+      projectId: process.env.FIREBASE_PROJECT_ID,
+      privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, "\n"),
+      clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+    }),
+  });
+}
 
 const db = admin.firestore();
 
-// ----------------- Middleware Auth -----------------
-async function authenticate(req, res, next) {
-  try {
-    const authHeader = req.headers.authorization;
-    if (!authHeader) return res.status(401).json({ message: "Token manquant" });
+// 🔐 Middleware pour vérifier le token Firebase
+async function verifyToken(req, res, next) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader) {
+    return res.status(401).json({ error: "Token manquant" });
+  }
 
-    const token = authHeader.split(" ")[1];
-    const decodedToken = await admin.auth().verifyIdToken(token);
-    req.user = decodedToken; // uid accessible via req.user.uid
+  const token = authHeader.split(" ")[1];
+  try {
+    const decoded = await admin.auth().verifyIdToken(token);
+    req.user = decoded;
     next();
-  } catch (error) {
-    console.error("Erreur auth:", error);
-    return res.status(401).json({ message: "Token invalide" });
+  } catch (err) {
+    return res.status(401).json({ error: "Token invalide ou expiré" });
   }
 }
 
-// ===================================================
-// 🔹 SIGNUP — Inscription simplifiée
-// ===================================================
+// -------------------------- AUTH --------------------------
+
+// 🔸 Signup
 app.post("/api/signup", async (req, res) => {
   try {
-    const { email, password, name, surname, residenceCountry, birthdate } = req.body;
-
-    if (!email || !password || !name || !surname) {
-      return res.status(400).json({ message: "Champs obligatoires manquants" });
+    const { email, password, name } = req.body;
+    if (!email || !password) {
+      return res.status(400).json({ error: "Email et mot de passe requis" });
     }
 
-    // Création utilisateur Firebase Auth
-    const userRecord = await admin.auth().createUser({
+    const user = await admin.auth().createUser({
       email,
       password,
-      displayName: `${name} ${surname}`,
+      displayName: name || "",
     });
 
-    // Enregistrement dans Firestore
-    await db.collection("users").doc(userRecord.uid).set({
-      uid: userRecord.uid,
-      name,
-      surname,
+    const token = await admin.auth().createCustomToken(user.uid);
+    await db.collection("users").doc(user.uid).set({
       email,
-      residenceCountry: residenceCountry || null,
-      birthdate: birthdate || null,
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      name: name || "",
+      createdAt: new Date().toISOString(),
     });
 
-    const customToken = await admin.auth().createCustomToken(userRecord.uid);
-
-    return res.status(201).json({
-      message: "Inscription réussie",
-      uid: userRecord.uid,
-      token: customToken,
-    });
-  } catch (error) {
-    console.error("Erreur inscription:", error);
-    return res.status(500).json({ message: error.message });
+    res.status(201).json({ uid: user.uid, token });
+  } catch (err) {
+    console.error("Erreur signup:", err);
+    res.status(500).json({ error: "Erreur lors de la création du compte" });
   }
 });
 
-// ----------------- LOGIN -----------------
+// 🔸 Login
 app.post("/api/login", async (req, res) => {
-  try {
-    const { email, password } = req.body;
-    if (!email || !password) return res.status(400).json({ message: "Email et mot de passe requis" });
+  const { email, password } = req.body;
+  if (!email || !password) {
+    return res.status(400).json({ error: "Email et mot de passe requis" });
+  }
 
-    const firebaseLoginUrl = `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${process.env.FIREBASE_API_KEY}`;
-    
-    const response = await fetch(firebaseLoginUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, password, returnSecureToken: true }),
-    });
+  try {
+    const response = await fetch(
+      `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${process.env.FIREBASE_API_KEY}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password, returnSecureToken: true }),
+      }
+    );
 
     const data = await response.json();
+    if (data.error) {
+      return res.status(401).json({ error: "Identifiants incorrects" });
+    }
 
-    if (data.error) return res.status(400).json({ message: data.error.message });
-
-    return res.status(200).json({
-      message: "Connexion réussie",
-      uid: data.localId,
+    res.json({
       token: data.idToken,
+      uid: data.localId,
+      email: data.email,
     });
-  } catch (error) {
-    console.error(error);
-    return res.status(500).json({ message: error.message });
+  } catch (err) {
+    console.error("Erreur login:", err);
+    res.status(500).json({ error: "Erreur serveur lors du login" });
   }
 });
 
-// ----------------- GET USER INFO -----------------
-app.get("/api/user", authenticate, async (req, res) => {
+// 🔸 Récupérer l’utilisateur connecté
+app.get("/api/user", verifyToken, async (req, res) => {
   try {
-    const uid = req.user.uid;
-    const userDoc = await db.collection("users").doc(uid).get();
-    if (!userDoc.exists) return res.status(404).json({ message: "Utilisateur non trouvé" });
-
-    return res.status(200).json(userDoc.data());
-  } catch (error) {
-    console.error(error);
-    return res.status(500).json({ message: error.message });
+    const userDoc = await db.collection("users").doc(req.user.uid).get();
+    if (!userDoc.exists) {
+      return res.status(404).json({ error: "Utilisateur non trouvé" });
+    }
+    res.json({ uid: req.user.uid, ...userDoc.data() });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Erreur serveur" });
   }
 });
 
-// ----------------- SAVE TESTIMONY -----------------
-app.post("/api/testimonies", authenticate, async (req, res) => {
+// -------------------------- TÉMOIGNAGES --------------------------
+
+// 🔸 Ajouter un témoignage
+app.post("/api/testimonies", verifyToken, async (req, res) => {
   try {
-    const uid = req.user.uid;
     const {
-      ethnie,
-      nationalite,
-      communaute,
-      dateVoyage,
-      villes,
       countryVisited,
+      villes,
+      temoignage,
       securityRating,
       observedDiscrimination,
       contextDiscrimination,
-      frequence,
-      temoignage,
+      ethnie,
       recommande,
       anonyme,
+      profil,
+      frequence,
     } = req.body;
 
-    // Validation des champs obligatoires
-    if (!countryVisited || !villes || !temoignage) {
-      return res.status(400).json({ message: "Champs obligatoires manquants" });
+    // 🧩 Validation minimale
+    if (!countryVisited || !temoignage) {
+      return res
+        .status(400)
+        .json({ error: "Le pays et le témoignage sont requis." });
     }
 
-    const testimonyRef = await db.collection("testimonies").add({
-      uid,
-      ethnie: ethnie || null,
-      nationalite: nationalite || null,
-      communaute: communaute || null,
-      dateVoyage: dateVoyage || null,
-      villes,
+    const testimonyData = {
+      uid: req.user.uid,
       countryVisited,
-      securityRating: securityRating || null,
+      villes: villes || null,
+      temoignage,
+      securityRating: securityRating || "Non spécifié",
       observedDiscrimination: observedDiscrimination || "Non",
       contextDiscrimination: contextDiscrimination || null,
-      frequence: frequence || null,
-      temoignage,
+      ethnie: ethnie || null,
       recommande: recommande || null,
-      anonyme: anonyme || "Oui",
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
-    });
+      anonyme: anonyme || "Non",
+      profil: Array.isArray(profil) ? profil : [],
+      frequence: Array.isArray(frequence) ? frequence : [],
+      createdAt: new Date().toISOString(),
+    };
 
-    return res.status(201).json({ message: "Témoignage enregistré", id: testimonyRef.id });
-  } catch (error) {
-    console.error("Erreur enregistrement témoignage:", error);
-    return res.status(500).json({ message: error.message });
+    const docRef = await db.collection("testimonies").add(testimonyData);
+    res.status(201).json({
+      id: docRef.id,
+      message: "Témoignage enregistré avec succès",
+      data: testimonyData,
+    });
+  } catch (err) {
+    console.error("Erreur lors de l’ajout du témoignage:", err);
+    res.status(500).json({ error: "Erreur serveur lors de l’enregistrement" });
   }
 });
 
-// ----------------- GET TESTIMONIES -----------------
-app.get("/api/testimonies", authenticate, async (req, res) => {
+// 🔸 Récupérer tous les témoignages (filtrés ou non)
+app.get("/api/testimonies", async (req, res) => {
   try {
     const { country } = req.query;
+    let query = db.collection("testimonies");
 
-    if (!country) {
-      return res.status(400).json({ message: "Le pays est requis pour filtrer les témoignages." });
+    if (country) {
+      query = query.where("countryVisited", "==", country);
     }
 
-    const snapshot = await db
-      .collection("testimonies")
-      .orderBy("createdAt", "desc")
-      .get();
+    const snapshot = await query.orderBy("createdAt", "desc").get();
+    const testimonies = snapshot.docs.map((doc) => ({
+      id: doc.id,
+      ...doc.data(),
+    }));
 
-    const testimonies = snapshot.docs
-      .map((doc) => ({ id: doc.id, ...doc.data() }))
-      .filter(
-        (t) =>
-          t.countryVisited &&
-          t.countryVisited.toLowerCase().includes(country.toLowerCase())
-      );
-
-    return res.status(200).json(testimonies);
-  } catch (error) {
-    console.error("Erreur récupération témoignages:", error);
-    return res.status(500).json({ message: error.message });
+    res.json(testimonies);
+  } catch (err) {
+    console.error("Erreur récupération témoignages:", err);
+    res.status(500).json({ error: "Erreur serveur" });
   }
 });
 
-// ----------------- START SERVER -----------------
-app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
+// --------------------------------------------------------------
+
+app.listen(PORT, () => {
+  console.log(`🚀 Serveur Safetravel API en cours sur le port ${PORT}`);
+});
