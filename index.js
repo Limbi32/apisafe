@@ -174,7 +174,6 @@ app.post("/api/testimonies", verifyToken, async (req, res) => {
   }
 });
 
-// 🔸 Récupérer tous les témoignages (filtrés ou non)
 app.get("/api/testimonies", async (req, res) => {
   try {
     const { country } = req.query;
@@ -184,11 +183,13 @@ app.get("/api/testimonies", async (req, res) => {
       query = query.where("countryVisited", "==", country);
     }
 
-    const snapshot = await query.orderBy("createdAt", "desc").get();
-    const testimonies = snapshot.docs.map((doc) => ({
-      id: doc.id,
-      ...doc.data(),
-    }));
+    // 🔥 Pas de orderBy ici
+    const snapshot = await query.get();
+
+    // ⚡ Tri manuel
+    const testimonies = snapshot.docs
+      .map((doc) => ({ id: doc.id, ...doc.data() }))
+      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 
     res.json(testimonies);
   } catch (err) {
