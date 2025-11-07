@@ -173,30 +173,46 @@ app.post("/api/testimonies", verifyToken, async (req, res) => {
     res.status(500).json({ error: "Erreur serveur lors de l’enregistrement" });
   }
 });
-
 app.get("/api/testimonies", async (req, res) => {
   try {
-    const { country } = req.query;
+    let { country } = req.query;
     let query = db.collection("testimonies");
 
-    if (country) {
-      query = query.where("countryVisited", "==", country);
+    // ✅ Si un filtre "country" est envoyé
+    if (country && typeof country === "string" && country.trim() !== "") {
+      // Normaliser (minuscules + trim)
+      const normalizedCountry = country.trim().toLowerCase();
+
+      // On va filtrer manuellement ensuite
+      const snapshot = await query.get();
+
+      const testimonies = snapshot.docs
+        .map((doc) => ({ id: doc.id, ...doc.data() }))
+        // Filtrer manuellement (insensible à la casse et espaces)
+        .filter((doc) => 
+          doc.countryVisited &&
+          doc.countryVisited.trim().toLowerCase() === normalizedCountry
+        )
+        // Trier par date
+        .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+      return res.json(testimonies);
     }
 
-    // 🔥 Pas de orderBy ici
+    // Sinon, pas de filtre
     const snapshot = await query.get();
 
-    // ⚡ Tri manuel
     const testimonies = snapshot.docs
       .map((doc) => ({ id: doc.id, ...doc.data() }))
       .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 
     res.json(testimonies);
   } catch (err) {
-    console.error("Erreur récupération témoignages:", err);
+    console.error("❌ Erreur récupération témoignages:", err);
     res.status(500).json({ error: "Erreur serveur" });
   }
 });
+
 
 // --------------------------------------------------------------
 
