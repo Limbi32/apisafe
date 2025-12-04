@@ -213,6 +213,77 @@ app.get("/api/testimonies", async (req, res) => {
   }
 });
 
+// 🔸 Forgot Password - envoyer le code
+app.post("/api/forgot-password", async (req, res) => {
+  const { email } = req.body;
+  if (!email) return res.status(400).json({ message: "Email requis" });
+
+  try {
+    // Vérifier si l'utilisateur existe
+    const user = await admin.auth().getUserByEmail(email);
+    if (!user) return res.status(404).json({ message: "Utilisateur non trouvé" });
+
+    // Générer un code aléatoire 6 chiffres
+    const resetCode = Math.floor(100000 + Math.random() * 900000).toString();
+
+    // Stocker le code dans Firestore avec expiration (10 minutes)
+    await db.collection("passwordResets").doc(user.uid).set({
+      code: resetCode,
+      email,
+      createdAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 10 * 60 * 1000).toISOString(), // 10 min
+    });
+
+    // TODO: envoyer le code par email via un service email (SendGrid, nodemailer...)
+    console.log(`Code de réinitialisation pour ${email}: ${resetCode}`);
+
+    res.json({ message: "Code de réinitialisation envoyé par email (voir console pour test)" });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Erreur lors de la demande de réinitialisation" });
+  }
+});
+// 🔸 Reset Password - vérifier code + changer mot de passe
+app.post("/api/reset-password", async (req, res) => {
+  const { email, code, newPassword } = req.body;
+  if (!email || !code || !newPassword) {
+    return res.status(400).json({ message: "Email, code et nouveau mot de passe requis" });
+  }
+
+  try {
+    const user = await admin.auth().getUserByEmail(email);
+
+    // Récupérer le code depuis Firestore
+    const resetDoc = await db.collection("passwordResets").doc(user.uid).get();
+    if (!resetDoc.exists) {
+      return res.status(400).json({ message: "Aucune demande de réinitialisation trouvée" });
+    }
+
+    const data = resetDoc.data();
+    const now = new Date();
+
+    if (data.code !== code) {
+      return res.status(400).json({ message: "Code incorrect" });
+    }
+
+    if (new Date(data.expiresAt) < now) {
+      return res.status(400).json({ message: "Le code a expiré" });
+    }
+
+    // Mettre à jour le mot de passe
+    await admin.auth().updateUser(user.uid, { password: newPassword });
+
+    // Supprimer le code pour éviter réutilisation
+    await db.collection("passwordResets").doc(user.uid).delete();
+
+    res.json({ message: "Mot de passe réinitialisé avec succès" });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Erreur lors de la réinitialisation du mot de passe" });
+  }
+});
+
+
 
 // --------------------------------------------------------------
 
